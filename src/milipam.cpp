@@ -131,11 +131,13 @@ int main(int argc, char* argv[]){
             string file_p;
             bool found = false;
             for (auto& [username, user_data] : j["users"].items()) {
-                for(auto entry = user_data.begin(); entry != user_data.end(); entry++){
+                for(auto entry = user_data.begin(); entry != user_data.end();){
                     if(entry[0][1]==to_del){
                         file_p = entry[0][2];
-                        user_data.erase(entry);
+                        entry = user_data.erase(entry);
                         found = true;
+                    } else {
+                        entry++;
                     }
                 }
             }
@@ -154,6 +156,7 @@ int main(int argc, char* argv[]){
             cout<<"entry id: "<<to_del<<" was successfully deleted"<<endl;
         }catch(const exception& e){
             cerr<<"DEL CMD ERROR: "<<e.what()<<endl;
+            return 2;
         }
     } else if(cmd =="-list"){
         try{
