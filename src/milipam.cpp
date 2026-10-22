@@ -13,6 +13,9 @@
 #include <sys/stat.h>
 #include <stdexcept>
 #include <sodium.h>
+#include <sys/file.h>
+#include <fcntl.h>
+#include <stdexcept>
 
 using namespace std;
 using json = nlohmann::json;
@@ -27,7 +30,33 @@ void create_secure_root_file(const string& filepath);
 
 const string db_path = "/var/lib/milipam/data.json";
 const string hash_path = "/var/lib/milipam/psw";
+const string lock_path = "/var/lib/milipam/data.lock";
 const string vers = "0.1.0";
+
+class FileLock {
+    int fd;
+public:
+    explicit FileLock(const std::string& lock_file_path) {
+        fd = open(lock_file_path.c_str(), O_CREAT | O_RDWR, 0600);
+        if (fd == -1) {
+            throw std::runtime_error("ERROR flock file try to open");
+        }
+        if (flock(fd, LOCK_EX) == -1) {
+            close(fd);
+            throw std::runtime_error("ERROR acces flock");
+        }
+    }
+
+    ~FileLock() {
+        if (fd != -1) {
+            flock(fd, LOCK_UN);
+            close(fd);
+        }
+    }
+    
+    FileLock(const FileLock&) = delete;
+    FileLock& operator=(const FileLock&) = delete;
+};
 
 int main(int argc, char* argv[]){
     if(argc<2){
@@ -57,6 +86,7 @@ int main(int argc, char* argv[]){
         int i = 1;
         json arr;
         try{
+            FileLock lock(lock_path);
             json j = read_db(db_path);
             if(j.empty() || !j.contains("users")){
                 j["users"]=json::object();
@@ -123,6 +153,7 @@ int main(int argc, char* argv[]){
         string to_del;
         to_del = argv[2];
         try{
+            FileLock lock(lock_path);
             json j = read_db(db_path);
             if (!j.contains("users") || !j["users"].is_object()) {
                 cerr << "database is empty or invalid." << endl;
@@ -160,6 +191,7 @@ int main(int argc, char* argv[]){
         }
     } else if(cmd =="-list"){
         try{
+            FileLock lock(lock_path);
             json j = read_db(db_path);
             for (auto& [username, user_data] : j["users"].items()) {
                 for(auto entry = user_data.begin(); entry != user_data.end(); entry++){

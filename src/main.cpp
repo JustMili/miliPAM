@@ -7,11 +7,42 @@
 #include <sodium.h>
 #include <argon2.h>
 #include <fstream>
+#include <sys/file.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <stdexcept>
+#include <string>
 
 using namespace std;
 using json = nlohmann::json;
 
 const string db_path = "/var/lib/milipam/data.json";
+const string lock_path = "/var/lib/milipam/data.lock";
+
+class FileLock {
+    int fd;
+public:
+    explicit FileLock(const std::string& lock_file_path) {
+        fd = open(lock_file_path.c_str(), O_CREAT | O_RDWR, 0600);
+        if (fd == -1) {
+            throw std::runtime_error("ERROR flock file try to open");
+        }
+        if (flock(fd, LOCK_EX) == -1) {
+            close(fd);
+            throw std::runtime_error("ERROR acces flock");
+        }
+    }
+
+    ~FileLock() {
+        if (fd != -1) {
+            flock(fd, LOCK_UN);
+            close(fd);
+        }
+    }
+    
+    FileLock(const FileLock&) = delete;
+    FileLock& operator=(const FileLock&) = delete;
+};
 
 json read_db(const string& filename){
     ifstream file(filename);
@@ -51,6 +82,7 @@ extern "C" int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, cons
     const char *username = nullptr;
     const char *service_name = nullptr;
     const char *password = nullptr;
+    FileLock lock(lock_path);
 
     pam_get_item(pamh, PAM_SERVICE, (const void **)&service_name);
     pam_get_user(pamh, &username, nullptr);
