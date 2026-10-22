@@ -39,11 +39,11 @@ void write_db(const string& filename, const json& j){
     }
 }
 
-bool verify_password(const string& hash, const string& password) {
+bool verify_password(const string& hash, const char* password) {
     if (sodium_init() < 0) {
         return false;
     }
-    return argon2id_verify(hash.c_str(), password.c_str(), password.length()) == ARGON2_OK;
+    return argon2id_verify(hash.c_str(), password, strlen(password)) == ARGON2_OK;
 }
 
 extern "C" int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, const char **argv) {
@@ -64,9 +64,13 @@ extern "C" int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, cons
             const struct pam_message *msgp = &msg;
             struct pam_response *resp = nullptr;
             if (conv->conv(1, &msgp, &resp, conv->appdata_ptr) == PAM_SUCCESS && resp) {
-                password = resp->resp;
-                pam_set_item(pamh, PAM_AUTHTOK, password);
+                if (resp->resp != nullptr) {
+                    pam_set_item(pamh, PAM_AUTHTOK, resp->resp);
+                    sodium_memzero(resp->resp, strlen(resp->resp));
+                    free(resp->resp);
+                }
                 free(resp);
+                pam_get_item(pamh, PAM_AUTHTOK, (const void **)&password);
             }
         }
     }
@@ -115,10 +119,6 @@ extern "C" int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, cons
             }
         }
 
-        size_t password_len = strlen(password);
-        if (password != nullptr && password_len > 0) {
-            sodium_memzero((void*)password, password_len);
-        }
         if (!stored_hash.empty()) {
             sodium_memzero(&stored_hash[0], stored_hash.size());
         }
@@ -129,12 +129,6 @@ extern "C" int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, cons
     } catch (...) {
         if (!stored_hash.empty()) {
             sodium_memzero(&stored_hash[0], stored_hash.size());
-        }
-        if (password != nullptr) {
-            size_t password_len = strlen(password);
-            if (password_len > 0) {
-                sodium_memzero((void*)password, password_len);
-            }
         }
         return PAM_SYSTEM_ERR;
     }
