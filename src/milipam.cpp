@@ -68,15 +68,15 @@ int main(int argc, char* argv[]){
         run_help();
         return 0;
     }
-    if (getuid() != 0 && (string)argv[argc-1]!="-test-no-root") {
+    if (getuid() != 0) {// && (string)argv[argc-1]!="-test-no-root"
         cerr << "You need root dumbass.\n";
         return 1;
     }
     if(cmd=="-add"){
         int need = 4;//2 arg + 2
-        if((string)argv[argc-1]=="-test-no-root"){
+        /*if((string)argv[argc-1]=="-test-no-root"){
             need+=1;
-        }
+        }*/
         if(argc<need){
             cerr<<"not enough arguments"<<endl;
             return 2;
@@ -143,9 +143,9 @@ int main(int argc, char* argv[]){
         }
     } else if(cmd=="-delete"){
         int need = 3;//2 arg + 1
-        if((string)argv[argc-1]=="-test-no-root"){
+        /*if((string)argv[argc-1]=="-test-no-root"){
             need+=1;
-        }
+        }*/
         if(argc<need){
             cerr<<"not enough arguments"<<endl;
             return 2;

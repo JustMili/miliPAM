@@ -82,7 +82,6 @@ extern "C" int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, cons
     const char *username = nullptr;
     const char *service_name = nullptr;
     const char *password = nullptr;
-    FileLock lock(lock_path);
 
     pam_get_item(pamh, PAM_SERVICE, (const void **)&service_name);
     pam_get_user(pamh, &username, nullptr);
@@ -113,6 +112,7 @@ extern "C" int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, cons
 
     string stored_hash;
     try {
+        FileLock lock(lock_path);
         json j = read_db(db_path);
         if (!j.contains("users") || !j["users"].is_object()) {
             return PAM_USER_UNKNOWN;
