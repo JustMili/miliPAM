@@ -83,7 +83,7 @@ extern "C" int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, cons
         }
 
         string user_str(username);
-        cout<<user_str<<endl;
+        //cout<<user_str<<endl;
         if (!j["users"].contains(user_str)) {
             return PAM_USER_UNKNOWN;
         }
