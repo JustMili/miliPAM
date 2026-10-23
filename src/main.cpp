@@ -51,7 +51,11 @@ extern "C" int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, cons
     if (username == nullptr || password == nullptr) {
         return PAM_AUTH_ERR;
     }
-    return authenticate(username, password);
+    int rc = authenticate(username, password);
+    if (rc != PAM_SUCCESS) {
+        pam_set_item(pamh, PAM_AUTHTOK, nullptr);
+    }
+    return rc;
 }
 
 extern "C" int pam_sm_setcred(pam_handle_t *pamh, int flags, int argc, const char **argv) {
@@ -103,6 +107,11 @@ static int authenticate(const char* user, const char* pass) {
     sigemptyset(&blk); sigaddset(&blk, SIGPIPE);
     pthread_sigmask(SIG_BLOCK, &blk, &old);
 
+    struct sigaction sa{}, oldsa{};
+    sa.sa_handler = SIG_DFL;
+    sigemptyset(&sa.sa_mask);
+    sigaction(SIGCHLD, &sa, &oldsa);
+
     int rc = PAM_SYSTEM_ERR, wfd = -1;
     pid_t pid = spawn_helper(wfd);
     if (pid > 0) {
@@ -111,6 +120,7 @@ static int authenticate(const char* user, const char* pass) {
         rc = wait_helper(pid);
         if (!ok) rc = PAM_SYSTEM_ERR;
     }
+    sigaction(SIGCHLD, &oldsa, nullptr);
     sodium_memzero(buf.data(), buf.size());
 
     timespec ts{0, 0};

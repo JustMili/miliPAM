@@ -21,7 +21,7 @@ using namespace std;
 using json = nlohmann::json;
 
 static bool read_input(array<char, 513>& b, size_t& len);
-static bool caller_allowed(string_view user);
+static bool caller_allowed(string_view user, uid_t uid);
 void write_db(const string& path, const json& j);
 static json read_db(const string& path);
 static int check_password(const string& user, string_view pass);
@@ -44,6 +44,8 @@ public:
 
 
 int main() {
+    uid_t caller = getuid();
+    if (setresuid(0, 0, 0) != 0) return 4;
     prctl(PR_SET_DUMPABLE, 0);
     rlimit rl{0, 0}; setrlimit(RLIMIT_CORE, &rl);
     umask(077);
@@ -57,7 +59,7 @@ int main() {
         if (p != string_view::npos && p > 0 && p + 1 < len) {
             auto user = all.substr(0, p);
             auto pass = all.substr(p + 1);
-            rc = caller_allowed(user) ? check_password(string(user), pass) : 3;
+            rc = caller_allowed(user, caller) ? check_password(string(user), pass) : 3;
         }
     }
     sodium_memzero(buf.data(), buf.size());
@@ -75,8 +77,7 @@ static bool read_input(array<char, 513>& b, size_t& len) {
     return false;
 }
 
-static bool caller_allowed(string_view user) {
-    uid_t uid = getuid();
+static bool caller_allowed(string_view user, uid_t uid) {
     if (uid == 0) return true;
     passwd pw{}; passwd* res = nullptr; char buf[1024];
     if (getpwuid_r(uid, &pw, buf, sizeof buf, &res) != 0 || !res) return false;
@@ -85,10 +86,17 @@ static bool caller_allowed(string_view user) {
 
 void write_db(const string& path, const json& j) {
     string tmp = path + ".tmp";
-    { ofstream f(tmp, ios::trunc);
-      if (!f) throw runtime_error("tmp open");
-      f << setw(4) << j << '\n'; f.flush();
-      if (!f) throw runtime_error("tmp write"); }
+    string out = j.dump(4) + '\n';
+    int fd = open(tmp.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+    if (fd == -1) throw runtime_error("tmp open");
+    const char* p = out.data(); size_t n = out.size();
+    while (n > 0) {
+        ssize_t w = write(fd, p, n);
+        if (w < 0) { if (errno == EINTR) continue; close(fd); throw runtime_error("tmp write"); }
+        p += w; n -= w;
+    }
+    if (fsync(fd) != 0) { close(fd); throw runtime_error("tmp fsync"); }
+    close(fd);
     if (rename(tmp.c_str(), path.c_str()) != 0) throw runtime_error("rename");
 }
 

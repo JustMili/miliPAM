@@ -17,6 +17,7 @@
 #include <fcntl.h>
 #include <stdexcept>
 #include <pwd.h>
+#include <cstdio>
 
 using namespace std;
 using json = nlohmann::json;
@@ -61,6 +62,7 @@ public:
 };
 
 int main(int argc, char* argv[]){
+    umask(077);
     if(argc<2){
         cout<<"nothing to do. run -help for commands"<<endl;
         return 0;
@@ -85,14 +87,19 @@ int main(int argc, char* argv[]){
         }
         string psw1, psw2, user, maxuse, hash, id, note;
         int maxdb=0;
-        int i = 1;
         json arr;
         try{
-            FileLock lock(lock_path);
-            json j = read_db(db_path);
-            if(j.empty() || !j.contains("users")){
-                j["users"]=json::object();
-                j["vers"]=vers;
+            user = argv[2];
+            maxuse = argv[3];
+            size_t pos = 0;
+            maxdb = stoi(maxuse, &pos);
+            if(pos!=maxuse.size()){
+                throw invalid_argument("max_uses must be a number");
+            }
+            if(!(argc<need+2)){
+                if((string)argv[4]=="-note"){
+                    note = argv[5];
+                }
             }
             psw1 = get_password("Enter password: ");
             psw2 = get_password("Repeat password: ");
@@ -105,32 +112,31 @@ int main(int argc, char* argv[]){
             hash = hash_password(psw1);
             sodium_memzero(&psw1[0], psw1.size());
             sodium_memzero(&psw2[0], psw2.size());
-            user = argv[2];
-            maxuse = argv[3];
-            maxdb = stoi(maxuse);
+
+            FileLock lock(lock_path);
+            json j = read_db(db_path);
+            if(j.empty() || !j.contains("users")){
+                j["users"]=json::object();
+                j["vers"]=vers;
+            }
             if(!j["users"].contains(user)){
                 j["users"][user]=json::array();
             }
             auto now = chrono::system_clock::now();
             auto duration = now.time_since_epoch();
             long long timestamp_seconds = chrono::duration_cast<chrono::seconds>(duration).count();
-            for (auto& [username, user_data] : j["users"].items()) {
-                if(user==username){
-                    id+=to_string(i)+to_string(user_data.size()+1);
-                    break;
-                }
-                i++;
-            }
+            do {
+                unsigned char rnd[8];
+                randombytes_buf(rnd, sizeof(rnd));
+                char hex[17];
+                sodium_bin2hex(hex, sizeof(hex), rnd, sizeof(rnd));
+                id = hex;
+            } while (access((hash_path+"/"+id).c_str(), F_OK) == 0);
             create_secure_root_file(hash_path+"/"+id);
             ofstream h_file(hash_path+"/"+id);
             h_file << hash;
             h_file.close();
             sodium_memzero(&hash[0], hash.size());
-            if(!(argc<need+2)){
-                if((string)argv[4]=="-note"){
-                    note = argv[5];
-                }
-            }
             arr = json::array({user, id, hash_path+"/"+id, maxdb, timestamp_seconds, note, "argon2", vers});
             j["users"][user].push_back(arr);
             write_db(db_path, j);
@@ -211,7 +217,11 @@ int main(int argc, char* argv[]){
             }
         }catch(const exception& e){
             cerr<<"LIST CMD ERROR: "<<e.what()<<endl;
+            return 2;
         }
+    } else {
+        cerr<<"idk command. run -help for help ofc"<<endl;
+        return 2;
     }
     return 0;
 }
@@ -232,13 +242,18 @@ json read_db(const string& filename){
 }
 
 void write_db(const string& filename, const json& j){
-    ofstream file(filename);
+    string tmp = filename + ".tmp";
+    ofstream file(tmp, ios::trunc);
     if (!file.is_open()) {
-        throw runtime_error("ERROR JSON WHEN TRY OPEN: "+ filename);
+        throw runtime_error("ERROR JSON WHEN TRY OPEN: "+ tmp);
     }
     file << setw(4) << j << endl;
+    file.close();
     if (file.fail()) {
         throw runtime_error("ERROR JSON WRITE");
+    }
+    if (rename(tmp.c_str(), filename.c_str()) != 0) {
+        throw runtime_error("ERROR JSON RENAME");
     }
 }
 
@@ -249,7 +264,9 @@ string hash_password(const string& password) {
     unsigned char salt[16];
     randombytes_buf(salt, sizeof(salt));
     char encoded[128];
-    argon2id_hash_encoded(2, 1 << 16, 1, password.c_str(), password.length(), salt, 16, 32, encoded, sizeof(encoded));
+    if (argon2id_hash_encoded(2, 1 << 16, 1, password.c_str(), password.length(), salt, 16, 32, encoded, sizeof(encoded)) != ARGON2_OK) {
+        throw runtime_error("ERROR HASH: argon2 failed");
+    }
     return string(encoded);
 }
 
@@ -264,32 +281,29 @@ string get_password(const string& prompt) {
     cout << prompt;
 
     termios oldt;
-    tcgetattr(STDIN_FILENO, &oldt);
-
-    termios newt = oldt;
-    newt.c_lflag &= ~ECHO;
-    tcsetattr(STDIN_FILENO, TCSANOW, &newt);
+    bool tty = tcgetattr(STDIN_FILENO, &oldt) == 0;
+    if (tty) {
+        termios newt = oldt;
+        newt.c_lflag &= ~ECHO;
+        tcsetattr(STDIN_FILENO, TCSANOW, &newt);
+    }
     string password;
     getline(cin, password);
 
-    tcsetattr(STDIN_FILENO, TCSANOW, &oldt);
+    if (tty) {
+        tcsetattr(STDIN_FILENO, TCSANOW, &oldt);
+    }
     cout << endl;
 
     return password;
 }
 
 void create_secure_root_file(const string& filepath) {
-    ofstream file(filepath);
-    if (!file.is_open()) {
+    int fd = open(filepath.c_str(), O_WRONLY | O_CREAT | O_EXCL, 0600);
+    if (fd == -1) {
         throw runtime_error("ERROR CAN'T MAKE FILE: " + filepath);
     }
-    file.close();
-    if (chmod(filepath.c_str(), S_IRUSR | S_IWUSR) != 0) {
-        throw runtime_error("ERROR chmod for: " + filepath);
-    }
-    if (chown(filepath.c_str(), 0, 0) != 0) {
-        throw runtime_error("ERROR chown (root:root) for: " + filepath);
-    }
+    close(fd);
 }
 
 /*string get_current_username() {
