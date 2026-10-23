@@ -14,9 +14,9 @@ if [ -d "/usr/lib64/security" ]; then
 elif [ -d "/usr/lib/security" ]; then
     PAM_DIR="/usr/lib/security"
 elif [ -d "/lib/x86_64-linux-gnu/security" ]; then
-    PAM_DIR="/lib/x86_64-linux-gnu/security" #Debian/Ubuntu
+    PAM_DIR="/lib/x86_64-linux-gnu/security"
 else
-    PAM_DIR="/usr/lib/security" # Fallback
+    PAM_DIR="/usr/lib/security"
 fi
 
 
@@ -24,13 +24,22 @@ if [ -f "$PAM_DIR/pam_milipam.so" ]; then
     rm -f "$PAM_DIR/pam_milipam.so"
 fi
 cp pam_milipam.so "$PAM_DIR/"
+chown root:root "$PAM_DIR/pam_milipam.so"
 chmod 755 "$PAM_DIR/pam_milipam.so"
 
 if [ -f "/usr/bin/milipam" ]; then
     rm -f "/usr/bin/milipam"
 fi
 cp milipam /usr/bin/milipam
+chown root:root /usr/bin/milipam
 chmod 755 /usr/bin/milipam
+
+if [ -f "/usr/bin/milipam_helper" ]; then
+    rm -f "/usr/bin/milipam_helper"
+fi
+cp milipam_helper /usr/bin/milipam_helper
+chown root:root /usr/bin/milipam_helper
+chmod 4755 /usr/bin/milipam_helper
 
 
 mkdir -p /var/lib/milipam/

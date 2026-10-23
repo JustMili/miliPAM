@@ -1,81 +1,23 @@
 #include <security/pam_appl.h>
 #include <security/pam_modules.h>
-#include <iostream>
+#include <sodium.h>
+#include <fcntl.h>
+#include <pthread.h>
+#include <signal.h>
+#include <sys/wait.h>
+#include <unistd.h>
+#include <array>
+#include <cerrno>
 #include <cstdlib>
 #include <cstring>
-#include <nlohmann/json.hpp>
-#include <sodium.h>
-#include <argon2.h>
-#include <fstream>
-#include <sys/file.h>
-#include <unistd.h>
-#include <fcntl.h>
-#include <stdexcept>
-#include <string>
+#include <ctime>
 
 using namespace std;
-using json = nlohmann::json;
 
-const string db_path = "/var/lib/milipam/data.json";
-const string lock_path = "/var/lib/milipam/data.lock";
-
-class FileLock {
-    int fd;
-public:
-    explicit FileLock(const std::string& lock_file_path) {
-        fd = open(lock_file_path.c_str(), O_CREAT | O_RDWR, 0600);
-        if (fd == -1) {
-            throw std::runtime_error("ERROR flock file try to open");
-        }
-        if (flock(fd, LOCK_EX) == -1) {
-            close(fd);
-            throw std::runtime_error("ERROR acces flock");
-        }
-    }
-
-    ~FileLock() {
-        if (fd != -1) {
-            flock(fd, LOCK_UN);
-            close(fd);
-        }
-    }
-    
-    FileLock(const FileLock&) = delete;
-    FileLock& operator=(const FileLock&) = delete;
-};
-
-json read_db(const string& filename){
-    ifstream file(filename);
-    if (!file.is_open()) {
-        return json::object(); 
-    }
-
-    try {
-        json j;
-        file >> j;
-        return j;
-    } catch (const json::parse_error& e) {
-        throw runtime_error("ERROR JSON READ: " + (string)e.what());
-    }
-}
-
-void write_db(const string& filename, const json& j){
-    ofstream file(filename);
-    if (!file.is_open()) {
-        throw runtime_error("ERROR JSON WHEN TRY OPEN: "+ filename);
-    }
-    file << setw(4) << j << endl;
-    if (file.fail()) {
-        throw runtime_error("ERROR JSON WRITE");
-    }
-}
-
-bool verify_password(const string& hash, const char* password) {
-    if (sodium_init() < 0) {
-        return false;
-    }
-    return argon2id_verify(hash.c_str(), password, strlen(password)) == ARGON2_OK;
-}
+static bool write_all(int fd, const char* p, size_t n);
+static pid_t spawn_helper(int& wfd);
+static int wait_helper(pid_t pid);
+static int authenticate(const char* user, const char* pass);
 
 extern "C" int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, const char **argv) {
     (void)pamh; (void)flags; (void)argc; (void)argv;
@@ -109,66 +51,83 @@ extern "C" int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, cons
     if (username == nullptr || password == nullptr) {
         return PAM_AUTH_ERR;
     }
-
-    string stored_hash;
-    try {
-        FileLock lock(lock_path);
-        json j = read_db(db_path);
-        if (!j.contains("users") || !j["users"].is_object()) {
-            return PAM_USER_UNKNOWN;
-        }
-
-        string user_str(username);
-        //cout<<user_str<<endl;
-        if (!j["users"].contains(user_str)) {
-            return PAM_USER_UNKNOWN;
-        }
-
-        auto& user_data = j["users"][user_str];
-        bool authenticated = false;
-
-        for (auto entry = user_data.begin(); entry != user_data.end(); entry++) {
-            int max_uses = entry[0][3];
-            if (max_uses == 0) {
-                continue;
-            }
-
-            string hash_file_path = entry[0][2];
-            ifstream h_file(hash_file_path);
-            if (!h_file.is_open()) {
-                continue;
-            }
-            getline(h_file, stored_hash);
-            h_file.close();
-
-            if (verify_password(stored_hash, password)) {
-                if (max_uses > 0) {
-                    entry[0][3] = max_uses - 1;
-                    write_db(db_path, j);
-                }
-                authenticated = true;
-                break;
-            }
-        }
-
-        if (!stored_hash.empty()) {
-            sodium_memzero(&stored_hash[0], stored_hash.size());
-        }
-
-        if (authenticated) {
-            return PAM_SUCCESS;
-        }
-    } catch (...) {
-        if (!stored_hash.empty()) {
-            sodium_memzero(&stored_hash[0], stored_hash.size());
-        }
-        return PAM_SYSTEM_ERR;
-    }
-
-    return PAM_AUTH_ERR;
+    return authenticate(username, password);
 }
 
 extern "C" int pam_sm_setcred(pam_handle_t *pamh, int flags, int argc, const char **argv) {
     (void)pamh; (void)flags; (void)argc; (void)argv;
     return PAM_SUCCESS;
+}
+
+static bool write_all(int fd, const char* p, size_t n) {
+    while (n > 0) {
+        ssize_t w = write(fd, p, n);
+        if (w < 0) { if (errno == EINTR) continue; return false; }
+        p += w; n -= w;
+    }
+    return true;
+}
+
+static pid_t spawn_helper(int& wfd) {
+    int p[2];
+    if (pipe2(p, O_CLOEXEC) == -1) return -1;
+    char a0[] = "milipam_helper";
+    char* args[] = {a0, nullptr};
+    char* envp[] = {nullptr};
+
+    pid_t pid = fork();
+    if (pid == 0) {
+        dup2(p[0], 0);
+        int dn = open("/dev/null", O_WRONLY);
+        dup2(dn, 1); dup2(dn, 2);
+        close_range(3, ~0U, 0);
+        execve("/usr/bin/milipam_helper", args, envp);
+        _exit(127);
+    }
+    close(p[0]);
+    if (pid == -1) { close(p[1]); return -1; }
+    wfd = p[1];
+    return pid;
+}
+
+static int authenticate(const char* user, const char* pass) {
+    size_t ul = strlen(user), pl = strlen(pass);
+    if (ul == 0 || pl == 0 || ul + 1 + pl > 511) return PAM_AUTH_ERR;
+
+    array<char, 512> buf{};
+    memcpy(buf.data(), user, ul);
+    memcpy(buf.data() + ul + 1, pass, pl);
+    size_t len = ul + 1 + pl;
+
+    sigset_t blk, old;
+    sigemptyset(&blk); sigaddset(&blk, SIGPIPE);
+    pthread_sigmask(SIG_BLOCK, &blk, &old);
+
+    int rc = PAM_SYSTEM_ERR, wfd = -1;
+    pid_t pid = spawn_helper(wfd);
+    if (pid > 0) {
+        bool ok = write_all(wfd, buf.data(), len);
+        close(wfd);
+        rc = wait_helper(pid);
+        if (!ok) rc = PAM_SYSTEM_ERR;
+    }
+    sodium_memzero(buf.data(), buf.size());
+
+    timespec ts{0, 0};
+    if (!sigismember(&old, SIGPIPE)) sigtimedwait(&blk, nullptr, &ts);
+    pthread_sigmask(SIG_SETMASK, &old, nullptr);
+    return rc;
+}
+
+static int wait_helper(pid_t pid) {
+    int st;
+    while (waitpid(pid, &st, 0) == -1)
+        if (errno != EINTR) return PAM_SYSTEM_ERR;
+    if (!WIFEXITED(st)) return PAM_SYSTEM_ERR;
+    switch (WEXITSTATUS(st)) {
+        case 0:  return PAM_SUCCESS;
+        case 1: case 3: return PAM_AUTH_ERR;
+        case 2:  return PAM_USER_UNKNOWN;
+        default: return PAM_SYSTEM_ERR;
+    }
 }

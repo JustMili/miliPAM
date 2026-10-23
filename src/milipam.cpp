@@ -16,6 +16,7 @@
 #include <sys/file.h>
 #include <fcntl.h>
 #include <stdexcept>
+#include <pwd.h>
 
 using namespace std;
 using json = nlohmann::json;
@@ -27,6 +28,7 @@ string hash_password(const string& password);
 bool verify_password(const string& hash, const string& password);
 string get_password(const string& prompt);
 void create_secure_root_file(const string& filepath);
+//string get_current_username();
 
 const string db_path = "/var/lib/milipam/data.json";
 const string hash_path = "/var/lib/milipam/psw";
@@ -36,14 +38,14 @@ const string vers = "0.1.0";
 class FileLock {
     int fd;
 public:
-    explicit FileLock(const std::string& lock_file_path) {
+    explicit FileLock(const string& lock_file_path) {
         fd = open(lock_file_path.c_str(), O_CREAT | O_RDWR, 0600);
         if (fd == -1) {
-            throw std::runtime_error("ERROR flock file try to open");
+            throw runtime_error("ERROR flock file try to open");
         }
         if (flock(fd, LOCK_EX) == -1) {
             close(fd);
-            throw std::runtime_error("ERROR acces flock");
+            throw runtime_error("ERROR acces flock");
         }
     }
 
@@ -68,11 +70,11 @@ int main(int argc, char* argv[]){
         run_help();
         return 0;
     }
-    if (getuid() != 0) {// && (string)argv[argc-1]!="-test-no-root"
-        cerr << "You need root dumbass.\n";
-        return 1;
-    }
     if(cmd=="-add"){
+        if (getuid() != 0) {// && (string)argv[argc-1]!="-test-no-root"
+            cerr << "You need root dumbass.\n";
+            return 1;
+        }
         int need = 4;//2 arg + 2
         /*if((string)argv[argc-1]=="-test-no-root"){
             need+=1;
@@ -142,6 +144,10 @@ int main(int argc, char* argv[]){
             return 2;
         }
     } else if(cmd=="-delete"){
+        if (getuid() != 0) {// && (string)argv[argc-1]!="-test-no-root"
+            cerr << "You need root dumbass.\n";
+            return 1;
+        }
         int need = 3;//2 arg + 1
         /*if((string)argv[argc-1]=="-test-no-root"){
             need+=1;
@@ -190,6 +196,10 @@ int main(int argc, char* argv[]){
             return 2;
         }
     } else if(cmd =="-list"){
+        if (getuid() != 0) {// && (string)argv[argc-1]!="-test-no-root"
+            cerr << "You need root dumbass.\n";
+            return 1;
+        }
         try{
             FileLock lock(lock_path);
             json j = read_db(db_path);
@@ -263,7 +273,7 @@ string get_password(const string& prompt) {
     getline(cin, password);
 
     tcsetattr(STDIN_FILENO, TCSANOW, &oldt);
-    std::cout << std::endl;
+    cout << endl;
 
     return password;
 }
@@ -281,6 +291,15 @@ void create_secure_root_file(const string& filepath) {
         throw runtime_error("ERROR chown (root:root) for: " + filepath);
     }
 }
+
+/*string get_current_username() {
+    uid_t uid = getuid();
+    struct passwd *pw = getpwuid(uid);
+    if (pw) {
+        return string(pw->pw_name);
+    }
+    return "";
+}*/
 
 void run_help(){
     cout<<"-help : show all commands"<<endl;
