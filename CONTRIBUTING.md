@@ -6,10 +6,14 @@
 
 ## Steps
 **1. Fork the repository.**
+
 **2. Create your branch for:**
-- **- features:** feature/branch-name
-- **- bugs:** bug/branch-name
+
+- **features:** feature/branch-name
+- **bugs:** bug/branch-name
 
 **3. Commit your changes**
+
 **4. Push to the branch**
+
 **5. Open a Pull Request targeting the branch named `test`.**
