@@ -33,6 +33,14 @@ git clone https://github.com/JustMili/miliPAM.git
 cd miliPAM
 make
 ```
+`make` automatically downloads and builds **nlohmann/json**, **Argon2** and **libsodium**
+into `externals/` (internet connection required on first build).
+
+You need to install these yourself:
+- `g++`, `gcc`, `make`, `git`, `curl`
+- `autoconf`, `automake`, `libtool` (needed to build libsodium)
+- PAM development headers (`libpam0g-dev` on Debian/Ubuntu, `pam-devel` on Fedora/RHEL)
+- glibc ≥ 2.34 (kernel ≥ 5.9)
 
 **Install**
 ```bash
